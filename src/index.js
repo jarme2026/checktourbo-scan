@@ -1216,6 +1216,23 @@ function json(
 }
 
 
+async function getSitePassword(env) {
+  const binding = env.SITE_PASSWORD;
+
+  if (!binding) return "";
+
+  if (typeof binding.get === "function") {
+    const value = await binding.get();
+    return String(value || "");
+  }
+
+  if (typeof binding === "string") {
+    return binding;
+  }
+
+  return "";
+}
+
 async function sha256Hex(value) {
   const bytes = new TextEncoder().encode(String(value || ""));
   const digest = await crypto.subtle.digest("SHA-256", bytes);
@@ -1234,8 +1251,9 @@ function readCookie(request, name) {
 }
 
 async function expectedAccessToken(env) {
-  if (!env.SITE_PASSWORD) return "";
-  return await sha256Hex("checktour-access:" + env.SITE_PASSWORD);
+  const sitePassword = await getSitePassword(env);
+  if (!sitePassword) return "";
+  return await sha256Hex("checktour-access:" + sitePassword);
 }
 
 async function hasSiteAccess(request, env) {
@@ -1252,20 +1270,22 @@ export default {
   async fetch(request, env, ctx) {
     const url = new URL(request.url);
 
-    // Password login endpoint.
     if (url.pathname === "/auth/login" && request.method === "POST") {
-      if (!env.SITE_PASSWORD) {
+      const sitePassword = await getSitePassword(env);
+
+      if (!sitePassword) {
         return json({ ok:false, error:"SITE_PASSWORD secret is not configured" }, 503);
       }
 
       let body = {};
       try { body = await request.json(); } catch {}
 
-      if (String(body.password || "") !== String(env.SITE_PASSWORD)) {
+      if (String(body.password || "") !== sitePassword) {
         return json({ ok:false, error:"invalid password" }, 401);
       }
 
       const token = await expectedAccessToken(env);
+
       return new Response(JSON.stringify({ ok:true }), {
         status:200,
         headers:{
@@ -1281,7 +1301,6 @@ export default {
         : json({ ok:false }, 401);
     }
 
-    // All API calls require a valid site session.
     if (url.pathname.startsWith("/api/")) {
       if (!(await hasSiteAccess(request, env))) {
         return json({ ok:false, error:"unauthorized" }, 401);
@@ -1293,11 +1312,11 @@ export default {
       const forwardUrl = new URL(request.url);
       forwardUrl.pathname = url.pathname.slice("/api".length) || "/";
       const forwardReq = new Request(forwardUrl.toString(), request);
+
       return stub.fetch(forwardReq);
     }
 
-    // The HTML loads first so it can display the password screen.
-    // Checklist data remains inaccessible until authentication succeeds.
+    // Load the original Checktour interface. Data APIs stay password-protected.
     return env.ASSETS.fetch(request);
   }
 };
