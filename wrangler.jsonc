@@ -1,5 +1,5 @@
 {
-  "name": "checktourbo",
+  "name": "checktourbo-scan",
   "compatibility_date": "2026-07-15",
   "main": "src/index.js",
   "vars": {
@@ -19,10 +19,18 @@
   },
   "durable_objects": {
     "bindings": [
-      { "name": "CHECKLIST", "class_name": "ChecklistState" }
+      {
+        "name": "CHECKLIST",
+        "class_name": "ChecklistState"
+      }
     ]
   },
   "migrations": [
-    { "tag": "v1", "new_sqlite_classes": ["ChecklistState"] }
+    {
+      "tag": "v1",
+      "new_sqlite_classes": [
+        "ChecklistState"
+      ]
+    }
   ]
 }
