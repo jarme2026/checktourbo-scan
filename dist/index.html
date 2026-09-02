@@ -1513,6 +1513,14 @@ function normalizeBarcode(value){
   return String(value ?? '').trim().toUpperCase();
 }
 
+function isAlphanumericBarcode(value){
+  const code = normalizeBarcode(value);
+
+  // Accept only codes containing at least one letter AND at least one number.
+  // Purely numeric barcodes are ignored and the camera remains open.
+  return /[A-Z]/.test(code) && /\d/.test(code);
+}
+
 function findRowByBarcode(decodedText){
   if (barcodeColIndex < 0) return -1;
   const target = normalizeBarcode(decodedText);
@@ -1541,6 +1549,11 @@ function findRowByBarcode(decodedText){
 async function applyBarcodeToChecklist(decodedText){
   const resultLabel = document.getElementById('barcodeLastResult');
   const code = normalizeBarcode(decodedText);
+
+  if (!isAlphanumericBarcode(code)){
+    resultLabel.textContent = 'Numeric-only barcode ignored.';
+    return false;
+  }
 
   if (barcodeColIndex < 0){
     resultLabel.textContent = 'Barcode column is not configured. Use the admin link to select it.';
@@ -1615,8 +1628,15 @@ async function startBarcodeScanner(){
       },
       async decodedText => {
         if (barcodeScanLocked) return;
-        barcodeScanLocked = true;
 
+        if (!isAlphanumericBarcode(decodedText)){
+          status.textContent = 'Numeric barcode ignored — keep scanning.';
+          document.getElementById('barcodeLastResult').textContent =
+            'Numeric-only barcode ignored.';
+          return;
+        }
+
+        barcodeScanLocked = true;
         status.textContent = 'Scanned: ' + decodedText;
         await applyBarcodeToChecklist(decodedText);
         await stopBarcodeScanner();
