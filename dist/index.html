@@ -363,6 +363,11 @@
   #barcodeLastResult{width:100%}
 }
 
+.barcode-tools .btn.scan-btn.ocr-enabled{
+  border-color:#3A6EA5; background:#3A6EA5;
+}
+.barcode-tools .btn.scan-btn.ocr-enabled:hover{background:#2F5A85}
+
 </style>
 </head>
 <body>
@@ -421,8 +426,12 @@
           <select id="qtyColSelect"></select>
         </div>
         <div class="field">
-          <label for="barcodeColSelect">Barcode column</label>
+          <label for="barcodeColSelect">Barcode / product number column</label>
           <select id="barcodeColSelect"></select>
+        </div>
+        <div class="field">
+          <label for="poColSelect">PO / Pedido column</label>
+          <select id="poColSelect"></select>
         </div>
         <button class="btn danger" id="resetBtn">Clear all progress</button>
         <button class="btn" id="testReportBtn">Send test report now</button>
@@ -430,8 +439,8 @@
 
 
       <div class="barcode-tools">
-        <button class="btn scan-btn" id="scanBarcodeBtn" type="button">Scan barcode</button>
-        <span id="barcodeLastResult">Ready to scan.</span>
+        <button class="btn scan-btn ocr-enabled" id="scanBarcodeBtn" type="button">Scan item</button>
+        <span id="barcodeLastResult">Ready to scan — reads a real barcode, the PP number, or the 12-digit product number.</span>
       </div>
       <div id="barcodeScannerPanel">
         <div class="barcode-camera-wrap">
@@ -439,7 +448,7 @@
             <button class="btn" id="closeBarcodeScannerBtn" type="button">Close</button>
           </div>
           <div id="barcodeReader"></div>
-          <div id="barcodeScanStatus">Point the camera at one barcode.</div>
+          <div id="barcodeScanStatus">Point the camera at one barcode, or the PP / product number.</div>
         </div>
       </div>
 
@@ -573,6 +582,7 @@ let rows = [];
 let tickColIndex = -1;
 let qtyColIndex = -1;
 let barcodeColIndex = -1;
+let poColIndex = -1;
 let rowKeys = [];
 let allTicks = {};
 let allNotes = {};
@@ -590,6 +600,7 @@ const rowCountEl = document.getElementById('rowCount');
 const colSelect = document.getElementById('colSelect');
 const qtyColSelect = document.getElementById('qtyColSelect');
 const barcodeColSelect = document.getElementById('barcodeColSelect');
+const poColSelect = document.getElementById('poColSelect');
 const resetBtn = document.getElementById('resetBtn');
 const changeFile = document.getElementById('changeFile');
 const progressLine = document.getElementById('progressLine');
@@ -713,13 +724,15 @@ async function applyParsedData(parsedHeaders, parsedRows, displayName){
   if (ok){
     renderTable();
     startPolling();
+    setTimeout(warmUpOcr, 1200);
   }
 }
 
-function setupColumnSelects(presetTickIndex, presetQtyIndex, presetBarcodeIndex){
+function setupColumnSelects(presetTickIndex, presetQtyIndex, presetBarcodeIndex, presetPoIndex){
   colSelect.innerHTML = '';
   qtyColSelect.innerHTML = '';
   barcodeColSelect.innerHTML = '';
+  poColSelect.innerHTML = '';
 
   const noneQtyOpt = document.createElement('option');
   noneQtyOpt.value = '-1';
@@ -730,6 +743,11 @@ function setupColumnSelects(presetTickIndex, presetQtyIndex, presetBarcodeIndex)
   noneBarcodeOpt.value = '-1';
   noneBarcodeOpt.textContent = '(select barcode column)';
   barcodeColSelect.appendChild(noneBarcodeOpt);
+
+  const nonePoOpt = document.createElement('option');
+  nonePoOpt.value = '-1';
+  nonePoOpt.textContent = '(select PO / pedido column)';
+  poColSelect.appendChild(nonePoOpt);
 
   headers.forEach((h, i) => {
     const opt1 = document.createElement('option');
@@ -746,6 +764,11 @@ function setupColumnSelects(presetTickIndex, presetQtyIndex, presetBarcodeIndex)
     opt3.value = i;
     opt3.textContent = h;
     barcodeColSelect.appendChild(opt3);
+
+    const opt4 = document.createElement('option');
+    opt4.value = i;
+    opt4.textContent = h;
+    poColSelect.appendChild(opt4);
   });
 
   if (typeof presetTickIndex === 'number'){
@@ -774,6 +797,16 @@ function setupColumnSelects(presetTickIndex, presetQtyIndex, presetBarcodeIndex)
   }
   barcodeColSelect.value = barcodeColIndex;
 
+  if (typeof presetPoIndex === 'number'){
+    poColIndex = presetPoIndex;
+  } else {
+    const poGuess = headers.findIndex(h =>
+      /pedido|\bpo\b|order|\bpp\b/i.test(h)
+    );
+    poColIndex = poGuess >= 0 ? poGuess : -1;
+  }
+  poColSelect.value = poColIndex;
+
   colSelect.onchange = async () => {
     tickColIndex = parseInt(colSelect.value, 10);
     const ok = await saveDataset();
@@ -788,6 +821,11 @@ function setupColumnSelects(presetTickIndex, presetQtyIndex, presetBarcodeIndex)
 
   barcodeColSelect.onchange = async () => {
     barcodeColIndex = parseInt(barcodeColSelect.value, 10);
+    await saveDataset();
+  };
+
+  poColSelect.onchange = async () => {
+    poColIndex = parseInt(poColSelect.value, 10);
     await saveDataset();
   };
 }
@@ -845,7 +883,7 @@ async function saveDataset(){
     const res = await fetch('/api/dataset', {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({ headers, rows, tickColIndex, qtyColIndex, barcodeColIndex })
+      body: JSON.stringify({ headers, rows, tickColIndex, qtyColIndex, barcodeColIndex, poColIndex })
     });
     if (!res.ok){
       alert('Could not save the sheet. Please try again.');
@@ -1408,12 +1446,15 @@ async function init(){
     if (isAdmin){
       fileNameEl.textContent = '(current sheet)';
       rowCountEl.textContent = rows.length;
-      setupColumnSelects(state.tickColIndex, state.qtyColIndex, state.barcodeColIndex);
+      setupColumnSelects(state.tickColIndex, state.qtyColIndex, state.barcodeColIndex, state.poColIndex);
     } else {
       tickColIndex = state.tickColIndex;
       qtyColIndex = state.qtyColIndex;
       barcodeColIndex = typeof state.barcodeColIndex === 'number'
         ? state.barcodeColIndex
+        : -1;
+      poColIndex = typeof state.poColIndex === 'number'
+        ? state.poColIndex
         : -1;
     }
     buildKeys();
@@ -1424,6 +1465,7 @@ async function init(){
     wasAllDone = rows.length > 0 && completeAtLoad === rows.length;
     renderTable();
     startPolling();
+    setTimeout(warmUpOcr, 1200);
   } else if (isAdmin){
     uploadArea.style.display = 'block';
   } else {
@@ -1596,15 +1638,409 @@ async function applyBarcodeToChecklist(decodedText){
   return true;
 }
 
+// =====================================================
+// LABEL OCR — reads the PP/pedido number and the 12-digit product number
+// printed on the label, in the same camera session as the barcode scanner.
+//
+// Why a separate matching path from the barcode scanner above: this app's
+// barcode scanner deliberately ignores purely-numeric codes
+// (isAlphanumericBarcode) to avoid false-matching random numeric barcodes
+// in the environment. The 12-digit product number read by OCR is *only*
+// ever produced by a regex that already requires exactly 12 digits found
+// near where the label text is, so that guard doesn't apply here — but to
+// keep the barcode scanner's existing, tested behavior untouched, OCR gets
+// its own findRowByProductNumber/applyProductNumberToChecklist instead of
+// reusing (and having to punch a hole through) the barcode ones.
+//
+// Two-level accuracy pass before OCR ever runs, both pure client-side CV
+// (no neural network / no download):
+//   Level 1 — fixed crop anchored to the same on-screen box the barcode
+//   scanner already asks the user to align with, extended downward since
+//   the PP/product number is usually printed just below the barcode.
+//   Level 2 — within that crop, trim away rows with near-zero horizontal
+//   edge energy (blank label margin) off the top/bottom, so the OCR pass
+//   only spends time on the part of the crop that actually has print on
+//   it instead of the fixed rectangle's full extent every time.
+// =====================================================
+let tesseractLoadPromise = null;
+
+function loadTesseract(){
+  if (window.Tesseract) return Promise.resolve();
+  if (tesseractLoadPromise) return tesseractLoadPromise;
+  tesseractLoadPromise = new Promise((resolve, reject) => {
+    const script = document.createElement('script');
+    script.src = 'https://cdn.jsdelivr.net/npm/tesseract.js@5/dist/tesseract.min.js';
+    script.onload = () => resolve();
+    script.onerror = () => reject(new Error('Could not load OCR library'));
+    document.head.appendChild(script);
+  });
+  return tesseractLoadPromise;
+}
+
+function withTimeout(promise, ms, message){
+  return Promise.race([
+    promise,
+    new Promise((_, reject) => setTimeout(() => reject(new Error(message)), ms))
+  ]);
+}
+
+let ocrWorkerPromise = null;
+
+function updateOcrProgressUI(m){
+  if (!m || !m.status) return;
+  const el = document.getElementById('barcodeScanStatus');
+  if (!el) return;
+  if (m.status === 'recognizing text' && typeof m.progress === 'number'){
+    el.textContent = `Reading… ${Math.round(m.progress * 100)}%`;
+  } else if (/loading|loaded|initializ/i.test(m.status)){
+    el.textContent = 'Loading OCR engine (first scan only)…';
+  }
+}
+
+function getOcrWorker(){
+  if (!ocrWorkerPromise){
+    ocrWorkerPromise = loadTesseract()
+      .then(() => Tesseract.createWorker('por', 1, { logger: updateOcrProgressUI }))
+      .then(async worker => {
+        await worker.setParameters({ tessedit_pageseg_mode: '11' });
+        return worker;
+      })
+      .catch(err => {
+        ocrWorkerPromise = null;
+        throw err;
+      });
+  }
+  return ocrWorkerPromise;
+}
+
+function warmUpOcr(){
+  getOcrWorker().catch(err => console.warn('OCR warm-up failed', err));
+}
+
+function stripAccents(value){
+  return String(value ?? '').normalize('NFD').replace(/[̀-ͯ]/g, '');
+}
+
+function ocrNormalizeText(value){
+  return stripAccents(value).toLowerCase();
+}
+
+function normalizeDigitsOnly(value){
+  return String(value ?? '').replace(/\D/g, '').replace(/^0+(?=\d)/, '');
+}
+
+// Real labels use "pp-00011899", "pp-00000230", etc. — always zero-padded,
+// but with a VARYING number of leading zeros (not just one), so the
+// leading zeros must be stripped from the whole captured run, not just
+// one of them, before comparing to the sheet (which likely stores the
+// number without padding).
+function extractPpNumber(ocrText){
+  const m = ocrText.match(/pp[\s\-]*?(\d{4,10})/i);
+  return m ? normalizeDigitsOnly(m[1]) : null;
+}
+
+// Real labels carry several different numeric codes at once: an 8-digit
+// "os-" reference, an 8-digit "pp-" number, a 10-digit "M.order" number
+// repeated under the barcode, and a 10-15-digit product code near the
+// description. Rather than gamble on exactly which one ended up in the
+// sheet's Barcode/product number column, every digit run in that range is
+// tried as a candidate — a wrong one simply won't match any row.
+function extractProductNumbers(ocrText){
+  const matches = ocrText.match(/\d{8,16}/g) || [];
+  return Array.from(new Set(matches));
+}
+
+let ocrFrameCanvas = null;
+let ocrTrimCanvas = null;
+
+function captureFrameForOcr(video, maxDim = 1100){
+  const vw = video.videoWidth, vh = video.videoHeight;
+  if (!vw || !vh) return null;
+
+  // Level 1: on real BoConcept labels the PP number and description sit
+  // well ABOVE the barcode line, not below it — the label is a long
+  // vertical strip, taller than one phone frame at scanning distance. So
+  // this isn't anchored tightly to the barcode's small qrbox height; it
+  // takes almost the full frame vertically, leaving margin only for the
+  // camera UI chrome at the very top/bottom.
+  const sx = Math.round(vw * 0.03);
+  const sy = Math.round(vh * 0.04);
+  const sw = Math.round(vw * 0.94);
+  const sh = Math.round(vh * 0.92);
+
+  const scale = Math.min(1, maxDim / Math.max(sw, sh));
+  const w = Math.max(1, Math.round(sw * scale));
+  const h = Math.max(1, Math.round(sh * scale));
+
+  if (!ocrFrameCanvas) ocrFrameCanvas = document.createElement('canvas');
+  ocrFrameCanvas.width = w;
+  ocrFrameCanvas.height = h;
+  const ctx = ocrFrameCanvas.getContext('2d');
+  ctx.drawImage(video, sx, sy, sw, sh, 0, 0, w, h);
+
+  const imageData = ctx.getImageData(0, 0, w, h);
+  const pixels = imageData.data;
+
+  let min = 255, max = 0;
+  const gray = new Uint8ClampedArray(w * h);
+  const rowEnergy = new Float64Array(h);
+  for (let y = 0, p = 0; y < h; y++){
+    let rowSum = 0;
+    for (let x = 0; x < w; x++, p++){
+      const i = p * 4;
+      const g = pixels[i] * 0.299 + pixels[i + 1] * 0.587 + pixels[i + 2] * 0.114;
+      gray[p] = g;
+      if (g < min) min = g;
+      if (g > max) max = g;
+      if (x > 0) rowSum += Math.abs(g - gray[p - 1]);
+    }
+    rowEnergy[y] = rowSum;
+  }
+
+  const range = Math.max(1, max - min);
+  for (let i = 0, p = 0; i < pixels.length; i += 4, p++){
+    const stretched = ((gray[p] - min) / range) * 255;
+    pixels[i] = pixels[i + 1] = pixels[i + 2] = stretched;
+  }
+  ctx.putImageData(imageData, 0, 0);
+
+  // Level 2: trim near-blank rows off the top/bottom of the fixed crop.
+  let maxEnergy = 1;
+  for (let y = 0; y < h; y++) if (rowEnergy[y] > maxEnergy) maxEnergy = rowEnergy[y];
+  const threshold = maxEnergy * 0.06;
+
+  let top = 0, bottom = h - 1;
+  while (top < bottom && rowEnergy[top] < threshold) top++;
+  while (bottom > top && rowEnergy[bottom] < threshold) bottom--;
+
+  const trimmedH = bottom - top + 1;
+  if (trimmedH < h * 0.9 && trimmedH > 10){
+    if (!ocrTrimCanvas) ocrTrimCanvas = document.createElement('canvas');
+    ocrTrimCanvas.width = w;
+    ocrTrimCanvas.height = trimmedH;
+    ocrTrimCanvas.getContext('2d').drawImage(ocrFrameCanvas, 0, top, w, trimmedH, 0, 0, w, trimmedH);
+    return ocrTrimCanvas;
+  }
+
+  return ocrFrameCanvas;
+}
+
+// Real labels get photographed in whatever orientation they're stuck on
+// the box — several test photos came in sideways or upside down, and OCR
+// only reads roughly-upright text. Trying every rotation on every frame
+// would be 4x the compute per pass, so instead each successive frame (the
+// label stays in view for several frames while the phone is held steady)
+// tries the next rotation in the cycle, landing on the right one within
+// a few frames without slowing any single pass down.
+let ocrRotateCanvas = null;
+let ocrRotationIndex = 0;
+const OCR_ROTATIONS = [0, 90, 180, 270];
+
+function rotateCanvasForOcr(sourceCanvas, degrees){
+  if (degrees === 0) return sourceCanvas;
+
+  const w = sourceCanvas.width, h = sourceCanvas.height;
+  const swap = degrees === 90 || degrees === 270;
+
+  if (!ocrRotateCanvas) ocrRotateCanvas = document.createElement('canvas');
+  ocrRotateCanvas.width = swap ? h : w;
+  ocrRotateCanvas.height = swap ? w : h;
+
+  const ctx = ocrRotateCanvas.getContext('2d');
+  ctx.save();
+  ctx.translate(ocrRotateCanvas.width / 2, ocrRotateCanvas.height / 2);
+  ctx.rotate(degrees * Math.PI / 180);
+  ctx.drawImage(sourceCanvas, -w / 2, -h / 2);
+  ctx.restore();
+
+  return ocrRotateCanvas;
+}
+
+function findRowByProductNumber(code){
+  if (barcodeColIndex < 0) return -1;
+  const target = normalizeBarcode(code);
+  if (!target) return -1;
+
+  const matches = [];
+  rows.forEach((row, index) => {
+    if (normalizeBarcode(row[barcodeColIndex]) === target) matches.push(index);
+  });
+  if (!matches.length) return -1;
+
+  const incomplete = matches.find(index => {
+    const expected = parseExpectedQty(rows[index]);
+    const tick = allTicks[rowKeys[index]];
+    const current = tick ? Number(tick.qty || 0) : 0;
+    return current < expected;
+  });
+
+  return incomplete ?? matches[0];
+}
+
+async function applyProductNumberToChecklist(code){
+  const resultLabel = document.getElementById('barcodeLastResult');
+  const rowIndex = findRowByProductNumber(code);
+  if (rowIndex < 0){
+    resultLabel.textContent = 'Product number not found: ' + code;
+    return false;
+  }
+
+  const key = rowKeys[rowIndex];
+  const expected = parseExpectedQty(rows[rowIndex]);
+  const existing = allTicks[key] || {};
+  const current = Number(existing.qty || 0);
+
+  const newQty = qtyColIndex >= 0 ? Math.min(expected, current + 1) : 1;
+  const response = await saveTickSet(key, { ...existing, qty:newQty }, expected);
+
+  if (!response){
+    resultLabel.textContent = 'Could not save scan: ' + code;
+    return false;
+  }
+
+  if (response.ticks) allTicks = response.ticks;
+  renderTable();
+  updateProgress();
+  if (response.allComplete) await maybeSendReport();
+
+  resultLabel.textContent = `${code} → ${newQty}/${expected}`;
+  return true;
+}
+
+async function applyRowIndexToChecklist(rowIndex){
+  const resultLabel = document.getElementById('barcodeLastResult');
+  const key = rowKeys[rowIndex];
+  const expected = parseExpectedQty(rows[rowIndex]);
+  const existing = allTicks[key] || {};
+  const current = Number(existing.qty || 0);
+
+  if (current >= expected){
+    resultLabel.textContent = `Item already complete (${current}/${expected}).`;
+    return { ok:true, alreadyComplete:true };
+  }
+
+  const newQty = qtyColIndex >= 0 ? Math.min(expected, current + 1) : 1;
+  const response = await saveTickSet(key, { ...existing, qty:newQty }, expected);
+  if (!response){
+    resultLabel.textContent = 'Could not save that match. Try again.';
+    return { ok:false };
+  }
+
+  if (response.ticks) allTicks = response.ticks;
+  renderTable();
+  updateProgress();
+  if (response.allComplete) await maybeSendReport();
+
+  resultLabel.textContent = `Matched → ${newQty}/${expected}.`;
+  return { ok:true };
+}
+
+let ocrLoopTimer = null;
+let ocrLoopBusy = false;
+let ocrLoopVideo = null;
+
+function startOcrLoop(video){
+  ocrLoopVideo = video;
+  if (ocrLoopTimer) return;
+  ocrLoopTimer = setInterval(runOcrScanPass, 900);
+}
+
+function stopOcrLoop(){
+  if (ocrLoopTimer){
+    clearInterval(ocrLoopTimer);
+    ocrLoopTimer = null;
+  }
+  ocrLoopBusy = false;
+  ocrLoopVideo = null;
+}
+
+async function runOcrScanPass(){
+  if (barcodeScanLocked || ocrLoopBusy || !ocrLoopVideo) return;
+  if (ocrLoopVideo.readyState < 2) return;
+
+  ocrLoopBusy = true;
+  const status = document.getElementById('barcodeScanStatus');
+
+  try{
+    const baseFrame = captureFrameForOcr(ocrLoopVideo);
+    if (!baseFrame) return;
+
+    const degrees = OCR_ROTATIONS[ocrRotationIndex % OCR_ROTATIONS.length];
+    ocrRotationIndex++;
+    const frame = rotateCanvasForOcr(baseFrame, degrees);
+
+    const worker = await getOcrWorker();
+    const { data } = await worker.recognize(frame);
+    const ocrText = ocrNormalizeText(data.text || '');
+    if (!ocrText.trim()){
+      if (status && !barcodeScanLocked) status.textContent = `Scanning (${degrees}°)… point at the label.`;
+      return;
+    }
+
+    const productCandidates = extractProductNumbers(ocrText);
+    for (const code of productCandidates){
+      if (findRowByProductNumber(code) < 0) continue;
+      if (barcodeScanLocked) return;
+
+      barcodeScanLocked = true;
+      if (status) status.textContent = 'Matched product number: ' + code;
+      const ok = await applyProductNumberToChecklist(code);
+      if (ok){
+        await stopBarcodeScanner();
+        return;
+      }
+      barcodeScanLocked = false;
+    }
+
+    const ppNumber = extractPpNumber(ocrText);
+    if (ppNumber && poColIndex >= 0 && !barcodeScanLocked){
+      const openMatches = rows
+        .map((row, index) => ({ row, index }))
+        .filter(({ row }) => normalizeDigitsOnly(row[poColIndex]) === ppNumber)
+        .filter(({ index }) => {
+          const expected = parseExpectedQty(rows[index]);
+          const tick = allTicks[rowKeys[index]];
+          const current = tick ? Number(tick.qty || 0) : 0;
+          return current < expected;
+        });
+
+      if (openMatches.length === 1){
+        barcodeScanLocked = true;
+        if (status) status.textContent = 'PP ' + ppNumber + ' → single open item matched.';
+        const result = await applyRowIndexToChecklist(openMatches[0].index);
+        if (result && result.ok){
+          await stopBarcodeScanner();
+          return;
+        }
+        barcodeScanLocked = false;
+      }
+    }
+
+    if (status && !barcodeScanLocked){
+      const bits = [
+        ppNumber ? 'PP ' + ppNumber : null,
+        productCandidates.length ? productCandidates.join(', ') : null
+      ].filter(Boolean);
+      status.textContent = bits.length
+        ? `Read (${degrees}°) ` + bits.join(' · ') + ' — no match yet, keep steady…'
+        : `Scanning (${degrees}°)… point at one barcode, or the PP / product number.`;
+    }
+  }catch(err){
+    console.error('OCR scan pass failed', err);
+  }finally{
+    ocrLoopBusy = false;
+  }
+}
+
 async function startBarcodeScanner(){
   if (barcodeScannerRunning) return;
 
   const panel = document.getElementById('barcodeScannerPanel');
   const status = document.getElementById('barcodeScanStatus');
 
-  if (barcodeColIndex < 0){
+  if (barcodeColIndex < 0 && poColIndex < 0){
     document.getElementById('barcodeLastResult').textContent =
-      'Barcode column is not configured. Use the admin link to select it.';
+      'Configure the Barcode/product number column and/or the PO column first (admin link).';
     return;
   }
 
@@ -1645,7 +2081,16 @@ async function startBarcodeScanner(){
     );
 
     barcodeScannerRunning = true;
-    status.textContent = 'Point the camera at one barcode.';
+    status.textContent = 'Point the camera at one barcode, or the PP / product number.';
+
+    // Same live camera session also reads the PP/product-number text printed
+    // on the label — a real barcode decode and an OCR match race each other;
+    // whichever finds a valid item first wins and closes the camera.
+    const videoEl = document.querySelector('#barcodeReader video');
+    if (videoEl){
+      startOcrLoop(videoEl);
+      warmUpOcr();
+    }
   }catch(err){
     console.error('Could not start barcode scanner', err);
     barcodeScannerRunning = false;
@@ -1660,6 +2105,7 @@ async function stopBarcodeScanner(){
   const current = barcodeScanner;
   barcodeScanner = null;
   barcodeScannerRunning = false;
+  stopOcrLoop();
 
   try{
     if (current){
@@ -1676,6 +2122,7 @@ document.getElementById('scanBarcodeBtn').addEventListener('click', startBarcode
 document.getElementById('closeBarcodeScannerBtn').addEventListener('click', stopBarcodeScanner);
 
 window.addEventListener('pagehide', () => {
+  stopOcrLoop();
   if (barcodeScannerRunning && barcodeScanner){
     barcodeScanner.stop().catch(() => {});
   }
