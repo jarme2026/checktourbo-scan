@@ -342,8 +342,7 @@
 }
 #barcodeScannerPanel.open{display:flex}
 .barcode-camera-wrap{
-  position:relative; width:100%; height:33vh; min-height:190px; background:#000;
-  box-shadow:0 8px 28px rgba(0,0,0,.45);
+  position:relative; width:100%; height:100vh; height:100dvh; background:#000;
 }
 #barcodeReader{width:100%;height:100%}
 #barcodeReader video{width:100%!important;height:100%!important;object-fit:cover}
@@ -353,8 +352,14 @@
 .barcode-camera-actions .btn{
   width:auto; background:rgba(0,0,0,.72); color:#fff; border-color:#fff;
 }
+#ocrReadout{
+  position:absolute; left:10px; right:10px; top:54px; z-index:150002;
+  padding:9px 12px; border-radius:6px; background:rgba(0,0,0,.72);
+  color:#7FE3B8; font-family:'Courier New',monospace; font-size:13px;
+  text-align:center; line-height:1.4;
+}
 #barcodeScanStatus{
-  position:absolute; left:10px; right:10px; bottom:8px; z-index:150002;
+  position:absolute; left:10px; right:10px; bottom:18px; z-index:150002;
   padding:7px 10px; border-radius:6px; background:rgba(0,0,0,.72);
   color:#fff; text-align:center; font-size:12px;
 }
@@ -448,6 +453,7 @@
             <button class="btn" id="closeBarcodeScannerBtn" type="button">Close</button>
           </div>
           <div id="barcodeReader"></div>
+          <div id="ocrReadout">No text read yet.</div>
           <div id="barcodeScanStatus">Point the camera at one barcode, or the PP / product number.</div>
         </div>
       </div>
@@ -1960,6 +1966,7 @@ async function runOcrScanPass(){
 
   ocrLoopBusy = true;
   const status = document.getElementById('barcodeScanStatus');
+  const readout = document.getElementById('ocrReadout');
 
   try{
     const baseFrame = captureFrameForOcr(ocrLoopVideo);
@@ -1974,10 +1981,25 @@ async function runOcrScanPass(){
     const ocrText = ocrNormalizeText(data.text || '');
     if (!ocrText.trim()){
       if (status && !barcodeScanLocked) status.textContent = `Scanning (${degrees}°)… point at the label.`;
+      if (readout) readout.textContent = `(${degrees}°) No text read yet.`;
       return;
     }
 
+    // Extracted and shown on screen every pass, whether or not it matches
+    // anything — the sheet doesn't have the real linking values configured
+    // yet, so right now this is the way to confirm the camera is reading
+    // the right numbers off the label at all. Once the sheet's PO/barcode
+    // columns hold the real values, the exact same read starts auto-
+    // ticking and closing below without anything else changing here.
     const productCandidates = extractProductNumbers(ocrText);
+    const ppNumber = extractPpNumber(ocrText);
+
+    if (readout){
+      readout.textContent =
+        `(${degrees}°) PP: ` + (ppNumber || '—') +
+        '  ·  Product #: ' + (productCandidates.length ? productCandidates.join(', ') : '—');
+    }
+
     for (const code of productCandidates){
       if (findRowByProductNumber(code) < 0) continue;
       if (barcodeScanLocked) return;
@@ -1992,7 +2014,6 @@ async function runOcrScanPass(){
       barcodeScanLocked = false;
     }
 
-    const ppNumber = extractPpNumber(ocrText);
     if (ppNumber && poColIndex >= 0 && !barcodeScanLocked){
       const openMatches = rows
         .map((row, index) => ({ row, index }))
